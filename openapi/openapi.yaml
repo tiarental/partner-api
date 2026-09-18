@@ -1,0 +1,454 @@
+openapi: 3.1.0
+info:
+  title: TIARENTAL Partner API
+  version: 1.0.0
+  description: |
+    Vendor-scoped API for cars, pricing, availability, bookings and WordPress synchronization.
+    TIARENTAL is the source of truth. All timestamps are ISO 8601 and all monetary values are decimal EUR unless stated otherwise.
+  contact:
+    name: TIARENTAL Partner Support
+    email: support@tiarental.com
+  license:
+    name: MIT
+    identifier: MIT
+servers:
+  - url: https://api.tiarental.com/v1
+    description: Production and test keys (the key prefix selects the environment)
+security:
+  - PartnerKey: []
+tags:
+  - name: Identity
+  - name: Cars
+  - name: Availability
+  - name: Pricing
+  - name: Bookings
+  - name: Webhooks
+paths:
+  /me:
+    get:
+      tags: [Identity]
+      operationId: getMe
+      summary: Verify the key and return its vendor/application scope
+      responses:
+        '200':
+          description: Authenticated scope
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MeEnvelope' }
+              example:
+                data:
+                  vendor: { id: 61d2bda7-b62d-4d4f-8d79-3a2c904c6671, name: AutoSpeed }
+                  partner_app: { id: 5b6ecf96-49aa-48c4-b87e-8fe1e34446ab, name: AutoSpeed Website, platform: wordpress, environment: live }
+                  api_version: v1
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+  /cars:
+    get:
+      tags: [Cars]
+      operationId: listCars
+      summary: List cars owned by the authenticated vendor
+      parameters:
+        - { $ref: '#/components/parameters/Limit' }
+        - { $ref: '#/components/parameters/Offset' }
+        - { name: category, in: query, schema: { type: string } }
+        - { name: transmission, in: query, schema: { type: string } }
+        - { name: pickup_at, in: query, schema: { type: string, format: date-time }, description: Must be supplied with dropoff_at. }
+        - { name: dropoff_at, in: query, schema: { type: string, format: date-time } }
+        - { name: pickup_location_id, in: query, schema: { type: string, format: uuid } }
+        - { name: dropoff_location_id, in: query, schema: { type: string, format: uuid } }
+        - { name: pickup_location, in: query, schema: { type: string }, description: Location name/slug alternative to pickup_location_id. }
+        - { name: dropoff_location, in: query, schema: { type: string }, description: Location name/slug alternative to dropoff_location_id. }
+      responses:
+        '200':
+          description: Vendor cars; when dates are supplied each item includes availability and a quote.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/MetaEnvelope'
+                  - type: object
+                    properties: { data: { type: array, items: { $ref: '#/components/schemas/CarWithAvailability' } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '422': { $ref: '#/components/responses/InvalidRequest' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+  /cars/{car_id}:
+    get:
+      tags: [Cars]
+      operationId: getCar
+      summary: Get one vendor-owned car
+      parameters: [ { $ref: '#/components/parameters/CarId' } ]
+      responses:
+        '200':
+          description: Car
+          content: { application/json: { schema: { type: object, required: [data], properties: { data: { $ref: '#/components/schemas/Car' } } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/CarNotFound' }
+  /availability:
+    get:
+      tags: [Availability]
+      operationId: getAvailability
+      summary: Check unified booking/block availability for a car and period
+      parameters:
+        - { $ref: '#/components/parameters/CarIdQuery' }
+        - { name: start_at, in: query, required: true, schema: { type: string, format: date-time } }
+        - { name: end_at, in: query, required: true, schema: { type: string, format: date-time } }
+      responses:
+        '200':
+          description: Availability result
+          content: { application/json: { schema: { type: object, required: [data], properties: { data: { $ref: '#/components/schemas/Availability' } } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/CarNotFound' }
+        '422': { $ref: '#/components/responses/InvalidDates' }
+  /pricing/quote:
+    get:
+      tags: [Pricing]
+      operationId: getPricingQuote
+      summary: Calculate the authoritative quote for a car and rental period
+      parameters:
+        - { $ref: '#/components/parameters/CarIdQuery' }
+        - { name: pickup_at, in: query, required: true, schema: { type: string, format: date-time } }
+        - { name: dropoff_at, in: query, required: true, schema: { type: string, format: date-time } }
+        - { name: pickup_location_id, in: query, schema: { type: string, format: uuid } }
+        - { name: dropoff_location_id, in: query, schema: { type: string, format: uuid } }
+        - { name: pickup_location, in: query, schema: { type: string } }
+        - { name: dropoff_location, in: query, schema: { type: string } }
+        - { name: cross_border_countries, in: query, schema: { type: string }, example: Kosovo,Montenegro }
+      responses:
+        '200':
+          description: Authoritative quote
+          content: { application/json: { schema: { type: object, properties: { data: { $ref: '#/components/schemas/Quote' } } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/CarNotFound' }
+        '409': { $ref: '#/components/responses/CarNotAvailable' }
+        '422': { $ref: '#/components/responses/InvalidDates' }
+  /bookings:
+    post:
+      tags: [Bookings]
+      operationId: createBooking
+      summary: Atomically create a request or instant booking
+      parameters: [ { $ref: '#/components/parameters/IdempotencyKey' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateBooking' }
+            example:
+              car_id: c98282d2-86b4-47b1-a3b1-e5f5cb3063f7
+              pickup_at: '2026-10-01T08:00:00Z'
+              dropoff_at: '2026-10-05T08:00:00Z'
+              pickup_location: Tirana International Airport
+              dropoff_location: Tirana International Airport
+              booking_mode: instant
+              external_reference: wp_order_914
+              customer: { first_name: Ada, last_name: Kola, email: ada@example.com, phone: '+355690000000', age: 29, driving_years: 8, country: Albania }
+      responses:
+        '201':
+          description: Booking created. An instant request is confirmed only if the car allows it; otherwise it becomes awaiting_supplier.
+          headers:
+            Idempotency-Replayed: { schema: { type: string, enum: ['true'] }, description: Present only for a replay. }
+          content: { application/json: { schema: { $ref: '#/components/schemas/BookingEnvelope' } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/CarNotAvailable' }
+        '422': { $ref: '#/components/responses/InvalidRequest' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+  /bookings/{booking_id}:
+    get:
+      tags: [Bookings]
+      operationId: getBooking
+      summary: Get a booking belonging to the authenticated vendor
+      parameters: [ { $ref: '#/components/parameters/BookingId' } ]
+      responses:
+        '200': { description: Booking, content: { application/json: { schema: { $ref: '#/components/schemas/BookingEnvelope' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/BookingNotFound' }
+  /bookings/{booking_id}/cancel:
+    post:
+      tags: [Bookings]
+      operationId: cancelBooking
+      summary: Cancel a booking created by this partner application
+      parameters: [ { $ref: '#/components/parameters/BookingId' }, { $ref: '#/components/parameters/IdempotencyKey' } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, properties: { reason: { type: string, maxLength: 500 } } }, example: { reason: Customer requested cancellation } } }
+      responses:
+        '200': { description: Cancelled booking, content: { application/json: { schema: { $ref: '#/components/schemas/BookingEnvelope' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/BookingNotFound' }
+        '409': { $ref: '#/components/responses/BookingConflict' }
+        '422': { $ref: '#/components/responses/InvalidRequest' }
+  /bookings/{booking_id}/modify:
+    post:
+      tags: [Bookings]
+      operationId: modifyBooking
+      summary: Modify dates, locations or customer fields while preserving the booked price
+      parameters: [ { $ref: '#/components/parameters/BookingId' }, { $ref: '#/components/parameters/IdempotencyKey' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ModifyBooking' }
+            example: { pickup_at: '2026-10-02T08:00:00Z', dropoff_at: '2026-10-06T08:00:00Z', customer: { phone: '+355691111111' } }
+      responses:
+        '200': { description: Modified booking, content: { application/json: { schema: { $ref: '#/components/schemas/BookingEnvelope' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/BookingNotFound' }
+        '409': { $ref: '#/components/responses/BookingConflict' }
+        '422': { $ref: '#/components/responses/InvalidRequest' }
+  /availability/blocks:
+    post:
+      tags: [Availability]
+      operationId: createAvailabilityBlock
+      summary: Create an atomic manual or external-booking block
+      parameters: [ { $ref: '#/components/parameters/IdempotencyKey' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateBlock' }
+            example: { car_id: c98282d2-86b4-47b1-a3b1-e5f5cb3063f7, start_at: '2026-10-10T08:00:00Z', end_at: '2026-10-15T08:00:00Z', type: external_booking, external_reference: direct-customer-52 }
+      responses:
+        '201': { description: Block created, content: { application/json: { schema: { $ref: '#/components/schemas/BlockEnvelope' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/CarNotFound' }
+        '409': { $ref: '#/components/responses/CarNotAvailable' }
+        '422': { $ref: '#/components/responses/InvalidRequest' }
+  /availability/blocks/{block_id}:
+    delete:
+      tags: [Availability]
+      operationId: deleteAvailabilityBlock
+      summary: Delete a block created by this partner application
+      parameters: [ { $ref: '#/components/parameters/BlockId' } ]
+      responses:
+        '200': { description: Block deleted, content: { application/json: { schema: { type: object, properties: { data: { type: object, properties: { id: { type: string, format: uuid }, deleted: { type: boolean } } } } } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/InvalidRequest' }
+  /webhooks:
+    get:
+      tags: [Webhooks]
+      operationId: listWebhooks
+      summary: List webhook registrations for this partner application
+      responses:
+        '200': { description: Webhooks with masked secrets, content: { application/json: { schema: { type: object, properties: { data: { type: array, items: { $ref: '#/components/schemas/Webhook' } } } } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    post:
+      tags: [Webhooks]
+      operationId: createWebhook
+      summary: Create or replace a signed webhook registration
+      description: The signing secret is returned once. Store it before discarding this response.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [url, events]
+              properties:
+                url: { type: string, format: uri, pattern: '^https://' }
+                events: { type: array, uniqueItems: true, items: { $ref: '#/components/schemas/WebhookEvent' } }
+            example: { url: 'https://vendor.example/wp-json/tiarental/v1/webhook', events: [booking.confirmed, booking.cancelled, availability.blocked] }
+      responses:
+        '201': { description: Webhook created and secret revealed once, content: { application/json: { schema: { type: object, properties: { data: { allOf: [ { $ref: '#/components/schemas/Webhook' }, { type: object, properties: { secret: { type: string, writeOnly: true }, secret_notice: { type: string } } } ] } } } } } }
+        '200': { description: Existing URL updated and a new secret revealed, content: { application/json: { schema: { type: object } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '422': { $ref: '#/components/responses/WebhookError' }
+  /webhooks/{webhook_id}:
+    delete:
+      tags: [Webhooks]
+      operationId: deleteWebhook
+      summary: Delete a webhook registration
+      parameters: [ { $ref: '#/components/parameters/WebhookId' } ]
+      responses:
+        '200': { description: Webhook deleted, content: { application/json: { schema: { type: object } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/WebhookError' }
+webhooks:
+  partnerEvent:
+    post:
+      summary: Event sent to each registered HTTPS endpoint
+      parameters:
+        - { name: X-TIARENTAL-Event, in: header, required: true, schema: { $ref: '#/components/schemas/WebhookEvent' } }
+        - { name: X-TIARENTAL-Event-Id, in: header, required: true, schema: { type: string, format: uuid } }
+        - { name: X-TIARENTAL-Delivery-Id, in: header, required: true, schema: { type: string, format: uuid } }
+        - { name: X-TIARENTAL-Signature, in: header, required: true, schema: { type: string, example: 't=1790253600,v1=347f...' } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/WebhookPayload' }
+            example:
+              id: evt_7cb90f2bc98e4db2a4fbba6e7f1519c2
+              type: booking.confirmed
+              created_at: '2026-09-18T18:02:00Z'
+              data: { booking_id: 5fd98740-8461-463f-b7f5-af1df438f75a, car_id: c98282d2-86b4-47b1-a3b1-e5f5cb3063f7, status: confirmed }
+      responses:
+        '2XX': { description: Acknowledged; non-2xx responses are retried with exponential backoff. }
+components:
+  securitySchemes:
+    PartnerKey:
+      type: http
+      scheme: bearer
+      bearerFormat: tr_live_xxx or tr_test_xxx
+      description: Reveal-once vendor/application key. The non-standard X-TIARENTAL-Key header is also accepted for server integrations.
+  parameters:
+    Limit: { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 50 } }
+    Offset: { name: offset, in: query, schema: { type: integer, minimum: 0, default: 0 } }
+    CarId: { name: car_id, in: path, required: true, schema: { type: string, format: uuid } }
+    CarIdQuery: { name: car_id, in: query, required: true, schema: { type: string, format: uuid } }
+    BookingId: { name: booking_id, in: path, required: true, schema: { type: string, format: uuid } }
+    BlockId: { name: block_id, in: path, required: true, schema: { type: string, format: uuid } }
+    WebhookId: { name: webhook_id, in: path, required: true, schema: { type: string, format: uuid } }
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema: { type: string, minLength: 8, maxLength: 200, pattern: '^[A-Za-z0-9._:-]+$' }
+      description: Unique for the operation. Reusing it with the same request replays the result; different content returns IDEMPOTENCY_CONFLICT.
+  schemas:
+    MeEnvelope:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: object
+          required: [vendor, partner_app, api_version]
+          properties:
+            vendor: { type: object, required: [id, name], properties: { id: { type: string, format: uuid }, name: { type: string } } }
+            partner_app: { type: object, required: [id, name, platform, environment], properties: { id: { type: string, format: uuid }, name: { type: string }, platform: { const: wordpress }, environment: { enum: [test, live] } } }
+            api_version: { const: v1 }
+    MetaEnvelope:
+      type: object
+      properties: { meta: { type: object, properties: { count: { type: integer }, limit: { type: integer }, offset: { type: integer } } } }
+    Car:
+      type: object
+      required: [id, slug, brand, model, year, category, transmission, fuel, seats, status, instant_booking, base_daily_price, currency, deposit, images, pickup_locations]
+      properties:
+        id: { type: string, format: uuid }
+        slug: { type: string }
+        brand: { type: string }
+        model: { type: string }
+        year: { type: integer }
+        category: { type: string }
+        transmission: { type: string }
+        fuel: { type: string }
+        seats: { type: integer }
+        doors: { type: integer }
+        bags: { type: integer }
+        status: { type: string }
+        online_booking_enabled: { type: boolean }
+        instant_booking: { type: boolean }
+        base_daily_price: { type: number }
+        currency: { const: EUR }
+        deposit: { type: number }
+        mileage: { type: object, properties: { policy: { type: string }, limit_per_day: { type: [integer, 'null'] } } }
+        driver_requirements: { type: object, properties: { minimum_age: { type: integer }, minimum_driving_years: { type: integer } } }
+        cross_border: { type: object, properties: { allowed: { type: boolean }, countries: { type: array, items: { type: string } }, fee: { type: number } } }
+        fuel_policy: { type: string }
+        free_cancellation_hours: { type: integer }
+        images: { type: array, items: { type: string, format: uri } }
+        pickup_locations: { type: array, items: { $ref: '#/components/schemas/Location' } }
+        updated_at: { type: string, format: date-time }
+    CarWithAvailability:
+      allOf:
+        - $ref: '#/components/schemas/Car'
+        - type: object
+          properties:
+            availability: { type: object, properties: { available: { type: boolean } } }
+            quote: { oneOf: [ { $ref: '#/components/schemas/Quote' }, { type: 'null' } ] }
+    Location:
+      type: object
+      properties: { id: { type: string, format: uuid }, name: { type: string }, city: { type: string }, type: { type: string }, is_primary: { type: boolean }, pickup_fee: { type: number }, dropoff_fee: { type: number } }
+    Quote:
+      type: object
+      additionalProperties: true
+      properties: { currency: { type: string }, rental_subtotal: { type: number }, total: { type: number }, platform_prepayment: { type: number }, supplier_balance: { type: number }, deposit_amount: { type: number }, prepayment_rate: { type: number } }
+    Availability:
+      type: object
+      required: [car_id, start_at, end_at, available, conflicts]
+      properties:
+        car_id: { type: string, format: uuid }
+        start_at: { type: string, format: date-time }
+        end_at: { type: string, format: date-time }
+        available: { type: boolean }
+        conflicts: { type: array, items: { $ref: '#/components/schemas/AvailabilityWindow' } }
+    AvailabilityWindow:
+      type: object
+      properties: { id: { type: string, format: uuid }, car_id: { type: string, format: uuid }, start_at: { type: string, format: date-time }, end_at: { type: string, format: date-time }, type: { enum: [booking, manual_block, external_booking, hold] }, source: { enum: [tiarental, wordpress, admin, external] }, status: { type: string }, booking_id: { type: [string, 'null'], format: uuid }, partner_app_id: { type: [string, 'null'], format: uuid }, external_reference: { type: [string, 'null'] } }
+    Customer:
+      type: object
+      required: [first_name, last_name, email, phone]
+      properties: { first_name: { type: string, maxLength: 100 }, last_name: { type: string, maxLength: 100 }, email: { type: string, format: email, maxLength: 320 }, phone: { type: string, minLength: 7, maxLength: 40 }, age: { type: integer, minimum: 18, maximum: 90 }, driving_years: { type: integer, minimum: 0, maximum: 72 }, country: { type: string, maxLength: 100 }, notes: { type: string, maxLength: 2000 } }
+    CreateBooking:
+      type: object
+      required: [car_id, pickup_at, dropoff_at, customer]
+      properties:
+        car_id: { type: string, format: uuid }
+        pickup_at: { type: string, format: date-time }
+        dropoff_at: { type: string, format: date-time }
+        pickup_location_id: { type: string, format: uuid }
+        dropoff_location_id: { type: string, format: uuid }
+        pickup_location: { type: string }
+        dropoff_location: { type: string }
+        customer: { $ref: '#/components/schemas/Customer' }
+        booking_mode: { enum: [request, instant], default: request }
+        external_reference: { type: string, maxLength: 200 }
+        cross_border_countries: { type: array, maxItems: 20, items: { type: string } }
+    ModifyBooking:
+      type: object
+      properties: { pickup_at: { type: string, format: date-time }, dropoff_at: { type: string, format: date-time }, pickup_location_id: { type: string, format: uuid }, dropoff_location_id: { type: string, format: uuid }, pickup_location: { type: string }, dropoff_location: { type: string }, customer: { type: object, properties: { first_name: { type: string }, last_name: { type: string }, email: { type: string, format: email }, phone: { type: string }, notes: { type: string } } } }
+    Booking:
+      type: object
+      required: [id, number, status, car, pickup, dropoff, pricing, source, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        number: { type: string }
+        status: { type: string }
+        mode: { type: string }
+        car: { type: object, properties: { id: { type: string, format: uuid }, brand: { type: string }, model: { type: string }, year: { type: integer } } }
+        pickup: { type: object, properties: { at: { type: string, format: date-time }, location: { oneOf: [ { type: object }, { type: 'null' } ] } } }
+        dropoff: { type: object, properties: { at: { type: string, format: date-time }, location: { oneOf: [ { type: object }, { type: 'null' } ] } } }
+        pricing: { type: object, properties: { currency: { type: string }, rental_subtotal: { type: number }, extras_total: { type: number }, total: { type: number }, platform_prepayment: { type: number }, supplier_balance: { type: number }, deposit: { type: number } } }
+        customer: { oneOf: [ { $ref: '#/components/schemas/Customer' }, { type: 'null' } ] }
+        source: { type: string }
+        external_reference: { type: [string, 'null'] }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    BookingEnvelope: { type: object, required: [data], properties: { data: { $ref: '#/components/schemas/Booking' } } }
+    CreateBlock:
+      type: object
+      required: [car_id, start_at, end_at]
+      properties: { car_id: { type: string, format: uuid }, start_at: { type: string, format: date-time }, end_at: { type: string, format: date-time }, type: { enum: [manual_block, external_booking], default: manual_block }, external_reference: { type: string, maxLength: 200 } }
+    Block:
+      type: object
+      properties: { id: { type: string, format: uuid }, car_id: { type: string, format: uuid }, start_at: { type: string, format: date-time }, end_at: { type: string, format: date-time }, type: { type: string }, source: { type: string }, status: { type: string }, external_reference: { type: [string, 'null'] }, created_at: { type: string, format: date-time }, updated_at: { type: string, format: date-time } }
+    BlockEnvelope: { type: object, required: [data], properties: { data: { $ref: '#/components/schemas/Block' } } }
+    WebhookEvent: { type: string, enum: [booking.created, booking.confirmed, booking.rejected, booking.cancelled, booking.modified, availability.blocked, availability.unblocked, car.updated, price.updated] }
+    Webhook:
+      type: object
+      properties: { id: { type: string, format: uuid }, url: { type: string, format: uri }, event_types: { type: array, items: { $ref: '#/components/schemas/WebhookEvent' } }, secret: { type: string, description: Masked on list and reveal-once on create. }, status: { type: string }, last_success_at: { type: [string, 'null'], format: date-time }, last_failure_at: { type: [string, 'null'], format: date-time }, created_at: { type: string, format: date-time }, updated_at: { type: string, format: date-time } }
+    WebhookPayload:
+      type: object
+      required: [id, type, created_at, data]
+      properties: { id: { type: string }, type: { $ref: '#/components/schemas/WebhookEvent' }, created_at: { type: string, format: date-time }, data: { type: object, additionalProperties: true } }
+    ErrorCode: { type: string, enum: [UNAUTHORIZED, FORBIDDEN, INVALID_REQUEST, CAR_NOT_FOUND, CAR_NOT_AVAILABLE, BOOKING_NOT_FOUND, BOOKING_CONFLICT, INVALID_DATES, WEBHOOK_ERROR, RATE_LIMITED, IDEMPOTENCY_CONFLICT, INTERNAL_ERROR] }
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message, request_id]
+          properties: { code: { $ref: '#/components/schemas/ErrorCode' }, message: { type: string }, request_id: { type: string }, details: { type: object, additionalProperties: true } }
+  responses:
+    Unauthorized: { description: Invalid, expired or revoked key, content: { application/json: { schema: { $ref: '#/components/schemas/Error' }, example: { error: { code: UNAUTHORIZED, message: A valid TIARENTAL Partner API key is required., request_id: req_1234567890abcdef } } } } }
+    Forbidden: { description: Resource belongs to another vendor/application, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+    InvalidRequest: { description: Invalid request or missing idempotency key, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+    InvalidDates: { description: Invalid date period, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+    CarNotFound: { description: Car is absent or outside the key's vendor scope, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+    CarNotAvailable: { description: Atomic availability conflict, content: { application/json: { schema: { $ref: '#/components/schemas/Error' }, example: { error: { code: CAR_NOT_AVAILABLE, message: The selected vehicle is not available for these dates., request_id: req_1234567890abcdef } } } } }
+    BookingNotFound: { description: Booking is absent or outside vendor scope, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+    BookingConflict: { description: Booking cannot be modified/cancelled in its current state, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+    WebhookError: { description: Invalid or unavailable webhook destination, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+    RateLimited: { description: Rate limit exceeded, headers: { Retry-After: { schema: { type: integer } } }, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
