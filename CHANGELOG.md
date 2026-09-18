@@ -1,5 +1,10 @@
 # Changelog
 
+## Git/DNS packaging v2 — 2026-09-18
+
+- Added Albanian guide for updating existing Git repositories and connecting `api.tiarental.com` to the main Vercel project.
+- No API endpoint, database migration, WordPress plugin, or runtime change; the API contract remains v1.
+
 ## 1.0.0 — 2026-09-18
 
 - Initial versioned Partner API contract at `https://api.tiarental.com/v1`.

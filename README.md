@@ -1,5 +1,7 @@
 # TIARENTAL Partner API
 
+> **Git/DNS bundle v2:** repo publike ekziston. Për update dhe domain-in shiko [GIT-DNS-PUSH-V2.md](GIT-DNS-PUSH-V2.md). API mbetet `/v1`; backend ekzekutohet në projektin kryesor TIARENTAL në Vercel.
+
 Public contract, SDK, examples, database migration and WordPress plugin for the vendor-scoped TIARENTAL Partner API.
 
 Production base URL: `https://api.tiarental.com/v1`
@@ -59,15 +61,6 @@ npm test
 
 These are deterministic contract tests. Production end-to-end tests require an explicitly authorized test vendor and current Supabase/Vercel deployment.
 
-## Create the public Git repository
+## Update the public Git repository
 
-```bash
-git init
-git add .
-git commit -m "Initial TIARENTAL Partner API v1"
-git branch -M main
-git remote add origin https://github.com/tiarental/partner-api.git
-git push -u origin main
-```
-
-Review `git diff --cached` and run a secret scanner before the first push.
+The repository already exists. Clone `https://github.com/tiarental/partner-api.git`, copy the files from the Git/DNS v2 bundle into the clone, review `git diff`, commit on a branch and open a pull request. See [GIT-DNS-PUSH-V2.md](GIT-DNS-PUSH-V2.md). Do not initialize a second repository or force-push over `main`.
