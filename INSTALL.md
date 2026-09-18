@@ -1,5 +1,7 @@
 # Installation and production test manual
 
+For the existing GitHub repositories and `api.tiarental.com` DNS instructions, start with [GIT-DNS-PUSH-V2.md](GIT-DNS-PUSH-V2.md). This is packaging revision v2; the contract remains `/v1`.
+
 ## 1. Prerequisites
 
 - main TIARENTAL v13.16.0 application on Node 24
